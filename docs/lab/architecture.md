@@ -54,9 +54,10 @@ stateDiagram-v2
     APPLY --> IDLE: checkpoint saved
 
     note right of PLAN
-        O1 / Claude (heavy tier)
+        Strategic tier (O1 / O3 / any reasoning model)
         Called rarely — only on new goals
         or after repeated failure
+        v2 query contract required
     end note
 
     note right of EXPERIMENT
@@ -159,7 +160,7 @@ graph TB
     Shizzle --> Lab[Lab Controller<br/>Improvement loops<br/>State management]
     Shizzle --> Fork[Fork Terminal<br/>OpenCode workflows<br/>Code execution]
 
-    Lab --> Planner[Strategic Planner<br/>O1 / Claude heavy<br/>Called rarely]
+    Lab --> Planner[Strategic Planner<br/>Strategic tier · eval-gated<br/>Called rarely]
     Lab --> Critic[Critic / Evaluator<br/>Gemini medium<br/>Per-experiment]
     Lab --> Workers[Workers<br/>Ollama / OpenCode fast<br/>Continuous]
 
@@ -179,10 +180,10 @@ graph TB
 
 | Role | Model | Tier | Cost | When Called |
 |------|-------|------|------|-------------|
-| Strategic Planner | O1 / Claude Opus | heavy | $$ | New goals, escalations only |
+| Strategic Planner | O1 / O3 / reasoning model (eval-gated) | heavy | $$ | New goals, escalations only |
 | Critic / Evaluator | Gemini 2.5 Flash | medium | ~$0.001/call | Every experiment |
 | Worker / Executor | Ollama (llama3.3:70b on M4 Pro) | fast | $0 | Continuous |
-| Orchestrator | Claude via Max sub | heavy | $0 (subscription) | Delegation decisions |
+| Orchestrator | Claude Code (Max sub) | heavy | $0 (subscription) | Delegation, execution, tool routing |
 
 ## 5. Optimization Sequence
 
