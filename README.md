@@ -115,18 +115,23 @@ All settings live in `.env` (copy from `.env.example`):
 
 [`CANON.md`](CANON.md) is the product specification authority. All architecture, prompt, model-role, and state schema changes are product-spec changes. Major decisions go through the O1-in-the-loop spec cycle (CANON Section 16).
 
-### Asking O1 the Right Questions
+### Asking the Strategic Tier the Right Questions
 
-O1 is the strategic brain — called rarely but with precision. Every O1 query must include (CANON Section 18):
+The strategic tier (O1, O3, or any reasoning model) is called rarely but with precision. Every query follows the **v2 Strategic Query Contract** (`ai-lab/o1_next_question_v2.md`), a 12-part protocol synthesized from O3, GPT-5.4, and Codex evaluations:
 
-1. **Objective** and explicit success metric
-2. **Current state snapshot** (structured, not narrative)
-3. **Constraints** (time, budget, tools, risk)
-4. **What has already been tried** and failure signatures
-5. **Exact decision question** to answer
-6. **Required output schema** (JSON)
+1. **Meta** — caller type, confidence threshold, budget envelope
+2. **Objective** and explicit success metric
+3. **Current state snapshot** (structured, not narrative)
+4. **Constraints** with blast radius (patch | refactor | rewrite)
+5. **Prior attempts** and failure signatures with categories
+6. **Explicit option set** — named alternatives to adjudicate, never open-ended "what's optimal?"
+7. **Assumptions & unknowns** — what we believe but haven't verified, what's missing
+8. **Decision question** — precise, bounded, against named options
+9. **Required output** — strategy, rejected alternatives, risk forecast, smallest validating experiment, kill criteria, memory actions, verification conditions
 
-The 10 canonical questions to ask for any major decision are in CANON Section 17.
+Key principle: **if confidence is below threshold, output an experiment, not a plan.** Uncertainty contracts beat confident plans built on shaky premises.
+
+See also: `ai-lab/o1_system_prompt.md` for the full strategist role definition, and `docs/lab/model-eval/` for the source evaluations.
 
 ### State Over Context
 
