@@ -1,0 +1,6 @@
+[submodule "references/AutoResearch-mac/autoresearch-mlx"]
+	path = references/AutoResearch-mac/autoresearch-mlx
+	url = https://github.com/trevin-creator/autoresearch-mlx.git
+[submodule "references/AutoResearch-mac/autoresearch-macos"]
+	path = references/AutoResearch-mac/autoresearch-macos
+	url = https://github.com/miolini/autoresearch-macos.git
