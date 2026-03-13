@@ -1,5 +1,13 @@
 # 01 — Autonomous Self-Improvement Lab
 
+> **The Fundamental Question (for GPT-5.4, Codex, and all reviewers):**
+>
+> *Are we properly referencing, leveraging, and utilizing the unique capabilities of the O1 reasoning model?*
+>
+> This repo uses O1 as its strategic reasoning tier — called rarely but with precision for planning and failure diagnosis. The ABC hybrid question: given three AutoResearch implementations (Karpathy's original, MLX fork, macOS fork) in `references/AutoResearch-mac/`, what is the optimal way to harness O1's extended chain-of-thought reasoning for autonomous self-improvement?
+>
+> **O1 vs O1 Pro:** O1 Pro is not just faster — it applies more inference-time compute, scoring ~12 points higher on AIME and ~9 points higher on GPQA Diamond. However, O1 with `reasoning_effort: high` reaches ~80-85% of O1 Pro's quality at 4x lower cost with full API access. O1 Pro remains largely a ChatGPT Pro ($200/mo) feature with limited API availability. O3 may have superseded O1 Pro's niche entirely. Our current stance: **O1 with `reasoning_effort: high` is sufficient** — no hurry, quality over speed, and the cost difference at our low call volume is negligible.
+
 A self-improving autonomous R&D system. O1 plans the strategy, workers execute experiments, critics evaluate results, and the system learns from every iteration. The lab builds and optimizes itself.
 
 ## How It Works
