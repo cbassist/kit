@@ -58,9 +58,7 @@ def load_local_backend(spec: str | None):
         return DummyLocalBackend()
 
     if ":" not in spec:
-        raise ValueError(
-            "Local backend spec must look like 'package.module:ClassName'"
-        )
+        raise ValueError("Local backend spec must look like 'package.module:ClassName'")
 
     module_name, class_name = spec.split(":", 1)
     module = import_module(module_name)
@@ -121,6 +119,7 @@ Return JSON only with this schema:
   "kill_criteria": ["string"],
   "escalation_trigger": "string"
 }}
+`key_evidence_ids` must contain `doc_id` values from the Retrieved Evidence section (for example, `CANON.md`), not bracket index numbers like `1`, `2`, or `3`.
 """.strip()
 
 
@@ -263,7 +262,7 @@ def main() -> int:
     rows: list[dict[str, Any]] = []
     for case in cases:
         for arm in arms:
-            logger.info("Running case=%s arm=%s", case['id'], arm)
+            logger.info("Running case=%s arm=%s", case["id"], arm)
             row = run_arm(
                 arm=arm,
                 case=case,
@@ -280,7 +279,8 @@ def main() -> int:
         "model": args.model,
         "case_count": len(cases),
         "run_count": len(rows),
-        "corpus_version": manifest.get("corpus_version") or manifest_corpus_version(manifest),
+        "corpus_version": manifest.get("corpus_version")
+        or manifest_corpus_version(manifest),
         "vector_store_id": manifest.get("vector_store_id"),
         "summary": summarize_results(rows),
         "results": rows,
