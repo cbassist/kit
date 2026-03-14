@@ -1,3 +1,5 @@
+"""Weighted score aggregation and per-arm result summarization."""
+
 from __future__ import annotations
 
 from typing import Any

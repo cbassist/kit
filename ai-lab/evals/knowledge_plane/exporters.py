@@ -1,14 +1,19 @@
+"""Export repo docs into an OpenAI vector store for knowledge-plane evals."""
+
 from __future__ import annotations
 
 import argparse
 import hashlib
 import json
+import logging
 import os
 import shutil
 import tempfile
 import time
 from pathlib import Path
 from typing import Iterable
+
+logger = logging.getLogger(__name__)
 
 from openai import OpenAI
 
@@ -110,7 +115,7 @@ def upload_paths(
             staged_path = tmpdir / upload_name
             shutil.copy2(path, staged_path)
 
-            print(f"[{idx}] Uploading {doc_id} as {upload_name} ...")
+            logger.info("[%d] Uploading %s as %s ...", idx, doc_id, upload_name)
             with staged_path.open("rb") as f:
                 vs_file = client.vector_stores.files.upload_and_poll(
                     vector_store_id=vector_store_id,

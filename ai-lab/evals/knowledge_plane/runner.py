@@ -1,13 +1,17 @@
+"""Main CLI orchestration: load cases, run local/hosted arms, grade, and write results."""
+
 from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
-import sys
 import time
 from importlib import import_module
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from openai import OpenAI
 
@@ -259,7 +263,7 @@ def main() -> int:
     rows: list[dict[str, Any]] = []
     for case in cases:
         for arm in arms:
-            print(f"Running case={case['id']} arm={arm}", file=sys.stderr)
+            logger.info("Running case=%s arm=%s", case['id'], arm)
             row = run_arm(
                 arm=arm,
                 case=case,

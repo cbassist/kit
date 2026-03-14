@@ -1,3 +1,5 @@
+"""Retriever protocol, local and hosted implementations, and context packing."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict

@@ -1,3 +1,5 @@
+"""Deterministic graders: retrieval recall, schema checks, citation groundedness, gold-fact coverage."""
+
 from __future__ import annotations
 
 import json
