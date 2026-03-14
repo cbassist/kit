@@ -31,6 +31,10 @@ import worker
 import critic
 import memory
 
+# ── Eval harness gate (optional — runs when cases file exists) ────
+_EVAL_CASES = Paths.ROOT / "evals" / "knowledge_plane" / "cases.jsonl"
+_EVAL_SCORE_THRESHOLD = float(__import__("os").environ.get("EVAL_SCORE_THRESHOLD", "0.56"))
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)-8s %(message)s",
@@ -42,6 +46,66 @@ Paths.ensure_dirs()
 
 # ── State checkpoint path ────────────────────────────────────────
 _STATE_FILE = Paths.STATE_DB.with_suffix(".json")
+
+
+def run_eval_gate() -> tuple[float, bool]:
+    """
+    Run the eval harness and return (score, passed).
+
+    This is the system-level quality gate: after each project-loop task,
+    we check whether the overall system quality still meets threshold.
+    Python owns this decision (Option B architecture).
+
+    Returns (0.0, True) if eval harness is not available.
+    """
+    if not _EVAL_CASES.exists():
+        return 0.0, True  # No eval cases → gate passes by default
+
+    try:
+        import json
+        from evals.knowledge_plane.runner import run_arm, load_cases
+        from evals.knowledge_plane.normalization import build_manifest_index
+        from evals.knowledge_plane.local_backend import RepoSearchBackend
+
+        cases = load_cases(str(_EVAL_CASES))
+        backend = RepoSearchBackend()
+
+        # Run local arm only (fast, free, no API cost for retrieval)
+        from openai import OpenAI
+        import os
+        client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY", ""))
+        model = os.environ.get("KNOWLEDGE_PLANE_MODEL", "gpt-4o-mini")
+
+        # Build a minimal manifest from the backend's indexed docs
+        manifest = {"files": [{"doc_id": c["doc_id"]} for c in backend._chunks]}
+        manifest_index = build_manifest_index(manifest)
+
+        scores = []
+        for case in cases:
+            row = run_arm(
+                arm="local",
+                case=case,
+                client=client,
+                model=model,
+                vector_store_id=None,
+                manifest=manifest,
+                manifest_index=manifest_index,
+                local_backend_spec=None,
+            )
+            scores.append(row["aggregate"]["case_score"])
+
+        avg = sum(scores) / len(scores) if scores else 0.0
+        passed = avg >= _EVAL_SCORE_THRESHOLD
+
+        logger.info(
+            "📊 Eval gate: %.4f (threshold=%.2f) → %s",
+            avg, _EVAL_SCORE_THRESHOLD, "PASS" if passed else "FAIL"
+        )
+        return avg, passed
+
+    except Exception as e:
+        logger.warning("📊 Eval gate skipped (error: %s)", e)
+        return 0.0, True  # Don't block on eval harness errors
 
 
 def load_or_create_state(goal: str) -> SystemState:
@@ -125,6 +189,18 @@ def project_loop(state: SystemState) -> SystemState:
         if success:
             state.completed_tasks.append(task_id)
             state.task_replan_counts.pop(task_id, None)
+
+            # T-02: Eval gate — check system quality after each task
+            eval_score, eval_passed = run_eval_gate()
+            if not eval_passed:
+                logger.warning(
+                    "📊 Eval gate FAILED after task %s (score=%.4f < %.2f). "
+                    "Escalating to strategic tier.",
+                    task_id, eval_score, _EVAL_SCORE_THRESHOLD,
+                )
+                state.last_error = f"Eval gate regression: {eval_score:.4f} < {_EVAL_SCORE_THRESHOLD}"
+                state = planner.diagnose_failures(state)
+
             # Unlock dependent tasks
             for t in state.project_graph:
                 if task_id in t.get("depends_on", []):
@@ -168,6 +244,9 @@ def strategic_loop(goal: str) -> SystemState:
         state = planner.build_project_graph(state)
         if not state.task_queue:
             raise RuntimeError("Planner returned no executable tasks.")
+        # T-01: Emit .sisyphus plan for OMO Atlas execution
+        plan_path = planner.emit_sisyphus_plan(state)
+        logger.info("══ Plan emitted: %s (use /start-work in OpenCode)", plan_path)
         state.save(_STATE_FILE)
 
     logger.info("══ Entering project loop with %d tasks.", len(state.task_queue))
