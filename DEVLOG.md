@@ -120,6 +120,10 @@ flowchart TB
 | 2026-03-13 | MLX preferred over Ollama | 8.5 vs 12 GB memory, +16% throughput, native speculative decoding | MLX benchmark |
 | 2026-03-13 | Speculative decoding scales with output length | +14% on short tasks, +124% on sustained generation | MLX benchmark |
 | 2026-03-13 | Goal 001 V-Model complete | Architecture validated end-to-end, all predictions confirmed | GOAL_001_REPORT.md |
+| 2026-03-14 | Local vector search beats hosted retrieval | Ollama nomic-embed-text: local 0.562 vs hosted 0.547 on 10-case eval | eval harness A/B run |
+| 2026-03-14 | OMO integration: B now, D later | O1 chose B (plans only), O3 chose D (plans + Ralph). GPT-5.4 adjudicated: B first for control, promote to D after Ralph hooks proven | docs/lab/OpenCode/ |
+| 2026-03-14 | Ralph promotion gate defined | Ralph may own optimization only after eval-hook gating is proven on a bounded task family | GPT-5.4 adjudication |
+| 2026-03-14 | Strip per-file LOC from docs | LOC counts go stale; use aggregates only. Added Key Rule #6: keep docs in sync | Maintenance decision |
 
 ## Current Status
 
@@ -197,8 +201,13 @@ Backend: `evals/knowledge_plane/local_backend.py` using `RepoSearchBackend`.
 - [x] Extract GPT-5.4's eval harness into `ai-lab/evals/knowledge_plane/`
 - [x] Build the A/B retrieval comparison (local vs hosted)
 - [x] Add vector search to skills DB / local retrieval backend
-- [ ] Deep research: OpenCode + OMO workflow capabilities for improvement loop
-- [ ] Observability beyond logging
+- [x] Deep research: OpenCode + OMO workflow capabilities
+- [x] Oracle consultation: O1 + O3 + GPT-5.4 adjudication → "B now, D later"
+- [ ] **T-01**: Prototype `.sisyphus/plans/*.md` generation from `planner.py`
+- [ ] **T-02**: Add eval-gated loop hook in `main.py` (Python owns stop/continue)
+- [ ] **T-03**: Plan→Execute→Evaluate integration test (end-to-end)
+- [ ] **Ralph promotion pilot**: Single Ralph Loop with eval-hook gating on bounded task
+- [ ] Observability / telemetry beyond logging
 
 ## V-Model Progress
 
