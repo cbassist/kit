@@ -203,10 +203,12 @@ Backend: `evals/knowledge_plane/local_backend.py` using `RepoSearchBackend`.
 - [x] Add vector search to skills DB / local retrieval backend
 - [x] Deep research: OpenCode + OMO workflow capabilities
 - [x] Oracle consultation: O1 + O3 + GPT-5.4 adjudication → "B now, D later"
-- [ ] **T-01**: Prototype `.sisyphus/plans/*.md` generation from `planner.py`
-- [ ] **T-02**: Add eval-gated loop hook in `main.py` (Python owns stop/continue)
-- [ ] **T-03**: Plan→Execute→Evaluate integration test (end-to-end)
+- [x] **T-01**: Prototype `.sisyphus/plans/*.md` generation from `planner.py`
+- [x] **T-02**: Add eval-gated loop hook in `main.py` (Python owns stop/continue)
+- [x] **T-03**: Plan→Execute→Evaluate integration test (all 3 subtests pass)
+- [ ] **OpenCode execution pilot**: Run a generated plan through `opencode run`, capture structured output
 - [ ] **Ralph promotion pilot**: Single Ralph Loop with eval-hook gating on bounded task
+- [ ] Figma diagrams: 3 FigJam boards generated, need to claim/verify in Figma workspace
 - [ ] Observability / telemetry beyond logging
 
 ## V-Model Progress
