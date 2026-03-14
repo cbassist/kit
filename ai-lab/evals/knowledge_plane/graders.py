@@ -51,7 +51,21 @@ def evidence_citation_grade(
         cited = []
 
     retrieved = set(retrieved_doc_ids)
-    bad = sorted([doc_id for doc_id in cited if doc_id not in retrieved])
+
+    def _is_valid_citation(doc_id: Any) -> bool:
+        if not isinstance(doc_id, str):
+            return False
+
+        normalized = doc_id.strip()
+        if not normalized or normalized.isdigit():
+            return False
+
+        # Allow chunk-level IDs (e.g. CANON.md::chunk-0) to match doc-level retrieved IDs by prefix.
+        return any(normalized.startswith(retrieved_id) for retrieved_id in retrieved)
+
+    bad = sorted(
+        [doc_id for doc_id in cited if not _is_valid_citation(doc_id)], key=str
+    )
 
     return {
         "citations_ok": len(bad) == 0,
