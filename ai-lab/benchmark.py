@@ -122,6 +122,28 @@ class BenchmarkResult:
         return asdict(self)
 
 
+import re
+
+
+def _extract_json(text: str) -> str:
+    """Extract JSON from a response that may be wrapped in markdown fences or extra text."""
+    # Try raw first
+    text = text.strip()
+    if text.startswith("{"):
+        return text
+    # Strip markdown code fences
+    m = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", text, re.DOTALL)
+    if m:
+        return m.group(1).strip()
+    # Find first { ... } block
+    start = text.find("{")
+    if start != -1:
+        end = text.rfind("}")
+        if end > start:
+            return text[start:end + 1]
+    return text
+
+
 def score_response(response: str, criteria: list[str]) -> dict[str, Any]:
     """
     Use the PROJECT model (critic tier) to score a response against criteria.
@@ -148,14 +170,14 @@ def score_response(response: str, criteria: list[str]) -> dict[str, Any]:
     ))
 
     try:
-        data = json.loads(raw)
+        data = json.loads(_extract_json(raw))
         return {
             "score": min(5, max(0, int(data.get("score", 0)))),
             "passed_criteria": data.get("passed_criteria", []),
             "failed_criteria": data.get("failed_criteria", []),
         }
     except (json.JSONDecodeError, ValueError):
-        logger.warning("[BENCHMARK] Could not parse score JSON, defaulting to 0.")
+        logger.warning("[BENCHMARK] Could not parse score JSON, defaulting to 0. Raw: %s", raw[:200])
         return {"score": 0, "passed_criteria": [], "failed_criteria": list(range(1, len(criteria)+1))}
 
 
