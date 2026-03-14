@@ -97,6 +97,8 @@ class Paths:
     ARTIFACTS    = ROOT / "artifacts"
     STATE_DB     = ROOT / "state.db"
     SKILLS_DB    = ROOT / "skills.json"
+    HEURISTICS_DB = ROOT / "heuristics.json"
+    EPISODIC_DB  = ROOT / "episodic.json"
 
     @classmethod
     def ensure_dirs(cls):

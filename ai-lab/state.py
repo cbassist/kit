@@ -12,7 +12,10 @@ import json
 import time
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from memory import EpisodicMemory
 
 
 @dataclass
@@ -22,6 +25,26 @@ class ExperimentResult:
     output: str        # raw tool output or model response
     timestamp: float = field(default_factory=time.time)
     metadata: dict[str, Any] = field(default_factory=dict)
+
+
+# ── Episodic Memory (Layer 3 — persistent across runs) ─────────
+
+@dataclass
+class EpisodicEntry:
+    """A single episode: one experiment cycle's outcome, persisted to episodic.json."""
+    cycle_id: str
+    goal: str
+    hypothesis: str
+    action: str          # what was actually done
+    outcome: str         # "success" | "failure" | "partial"
+    score_before: float | None = None
+    score_after: float | None = None
+    score_delta: float | None = None
+    kept: bool | None = None   # True = kept, False = reverted, None = no git discipline yet
+    timestamp: float = field(default_factory=time.time)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
 
 
 @dataclass
@@ -71,10 +94,17 @@ class SystemState:
         else:
             self.failure_count = 0  # reset on success
 
-    def context_summary(self, max_experiments: int = 5) -> str:
+    def context_summary(
+        self,
+        max_experiments: int = 5,
+        episodic: EpisodicMemory | None = None,
+    ) -> str:
         """
         Returns a compact, token-efficient summary injected into each
         worker's prompt. Keeps context fresh without bloat.
+
+        If an EpisodicMemory is provided, includes persistent history
+        from prior runs (Layer 3).
         """
         recent = self.recent_experiments[-max_experiments:]
         lines = [
@@ -88,9 +118,12 @@ class SystemState:
             "",
             "HEURISTICS:",
             *[f"  - {h}" for h in self.heuristics],
-            "",
-            "RECENT EXPERIMENTS:",
         ]
+        if episodic and episodic.entries:
+            lines.append("")
+            lines.append(episodic.summary())
+        lines.append("")
+        lines.append("RECENT EXPERIMENTS (this run):")
         for ex in recent:
             lines.append(
                 f"  [{ex.outcome.upper()}] {ex.hypothesis}: {ex.output[:200]}"

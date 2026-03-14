@@ -61,6 +61,87 @@ def write_file(filename: str, content: str) -> Path:
     return path
 
 
+# ── Git Keep/Revert (T-02) ────────────────────────────────────────
+
+_PROJECT_ROOT = Paths.ROOT.parent  # ai-lab/ → project root
+
+
+def git_commit_snapshot(message: str = "auto: snapshot before experiment") -> dict:
+    """
+    Stage all changes and commit — snapshot before an experiment runs.
+    Returns {"commit_hash": ..., "success": True} or {"error": ..., "success": False}.
+    """
+    try:
+        # Stage all tracked + untracked changes
+        subprocess.run(
+            ["git", "add", "-A"],
+            cwd=str(_PROJECT_ROOT), capture_output=True, text=True, timeout=10,
+        )
+        # Check if there's anything to commit
+        status = subprocess.run(
+            ["git", "diff", "--cached", "--quiet"],
+            cwd=str(_PROJECT_ROOT), capture_output=True, timeout=10,
+        )
+        if status.returncode == 0:
+            # Nothing staged — get current HEAD as the snapshot
+            head = subprocess.run(
+                ["git", "rev-parse", "--short", "HEAD"],
+                cwd=str(_PROJECT_ROOT), capture_output=True, text=True, timeout=10,
+            )
+            commit_hash = head.stdout.strip()
+            logger.info("[GIT] No changes to commit — using HEAD %s as snapshot", commit_hash)
+            return {"commit_hash": commit_hash, "success": True, "was_noop": True}
+
+        result = subprocess.run(
+            ["git", "commit", "-m", message],
+            cwd=str(_PROJECT_ROOT), capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode != 0:
+            return {"error": result.stderr.strip(), "success": False}
+
+        # Get the short hash of the new commit
+        head = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=str(_PROJECT_ROOT), capture_output=True, text=True, timeout=10,
+        )
+        commit_hash = head.stdout.strip()
+        logger.info("[GIT] Snapshot committed: %s — %s", commit_hash, message)
+        return {"commit_hash": commit_hash, "success": True, "was_noop": False}
+
+    except Exception as e:
+        logger.error("[GIT] Snapshot failed: %s", e)
+        return {"error": str(e), "success": False}
+
+
+def git_revert_last() -> dict:
+    """
+    Revert the last commit (undo a failed experiment).
+    Uses git revert --no-edit to create a new commit that undoes the changes.
+    Returns {"reverted_hash": ..., "success": True} or {"error": ..., "success": False}.
+    """
+    try:
+        # Get the hash we're about to revert
+        head = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=str(_PROJECT_ROOT), capture_output=True, text=True, timeout=10,
+        )
+        target_hash = head.stdout.strip()
+
+        result = subprocess.run(
+            ["git", "revert", "--no-edit", "HEAD"],
+            cwd=str(_PROJECT_ROOT), capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode != 0:
+            return {"error": result.stderr.strip(), "success": False}
+
+        logger.info("[GIT] Reverted commit %s", target_hash)
+        return {"reverted_hash": target_hash, "success": True}
+
+    except Exception as e:
+        logger.error("[GIT] Revert failed: %s", e)
+        return {"error": str(e), "success": False}
+
+
 # ── Tool registry (for the worker to request tools by name) ─────
 REGISTRY: dict[str, callable] = {
     "run_python": run_python,

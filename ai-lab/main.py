@@ -30,7 +30,12 @@ import planner
 import worker
 import critic
 import memory
+from memory import EpisodicMemory
 import opencode_executor
+import tools
+
+# ── Persistent episodic memory (Layer 3) ──────────────────────
+episodic_memory = EpisodicMemory()
 
 # ── Eval harness gate (optional — runs when cases file exists) ────
 _EVAL_CASES = Paths.ROOT / "evals" / "knowledge_plane" / "cases.jsonl"
@@ -56,25 +61,23 @@ Paths.ensure_dirs()
 _STATE_FILE = Paths.STATE_DB.with_suffix(".json")
 
 
-def run_eval_gate() -> tuple[float, bool]:
+def run_eval_gate() -> tuple[float, bool, dict]:
     """
-    Run the eval harness and return (score, passed).
+    Run the eval harness and return (score, passed, details).
 
-    This is the system-level quality gate: after each project-loop task,
-    we check whether the overall system quality still meets threshold.
-    Python owns this decision (Option B architecture).
+    Returns per-metric averages for T-03 template matching:
+        avg_support_recall, avg_gold_fact_coverage, avg_schema_ok, avg_citations_ok
 
-    Returns (0.0, True) if eval harness is not available.
+    Returns (0.0, True, {}) if eval harness is not available.
     """
     if not _EVAL_CASES.exists():
-        return 0.0, True  # No eval cases → gate passes by default
+        return 0.0, True, {}
 
     try:
         import json
         import os
         import subprocess
 
-        # Run the eval harness as a subprocess to avoid import tangles
         result = subprocess.run(
             [
                 "uv", "run", "python", "-m", "evals.knowledge_plane.runner",
@@ -91,22 +94,49 @@ def run_eval_gate() -> tuple[float, bool]:
 
         if result.returncode != 0:
             logger.warning("📊 Eval harness failed: %s", result.stderr[:300])
-            return 0.0, True
+            return 0.0, True, {}
 
-        # Parse the summary JSON from stdout (first JSON block)
-        summary = json.loads(result.stdout.split("\n\n")[0])
+        # Parse output — first JSON block is summary, rest are per-case
+        blocks = result.stdout.split("\n\n")
+        summary = json.loads(blocks[0])
         avg = summary.get("avg_case_score", 0.0)
         passed = avg >= _EVAL_SCORE_THRESHOLD
+
+        # Extract per-metric averages from per-case results
+        details = {"avg_case_score": avg}
+        if len(blocks) > 1:
+            recalls, facts, schemas, citations = [], [], [], []
+            for block in blocks[1:]:
+                block = block.strip()
+                if not block:
+                    continue
+                try:
+                    case = json.loads(block)
+                    rg = case.get("retrieval_grade", {})
+                    recalls.append(rg.get("support_recall", 0.0))
+                    fg = case.get("fact_grade", {})
+                    facts.append(fg.get("gold_fact_coverage", 0.0))
+                    sg = case.get("schema_grade", {})
+                    schemas.append(1.0 if sg.get("schema_ok") else 0.0)
+                    cg = case.get("citation_grade", {})
+                    citations.append(1.0 if cg.get("citations_ok") else 0.0)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+            if recalls:
+                details["avg_support_recall"] = sum(recalls) / len(recalls)
+                details["avg_gold_fact_coverage"] = sum(facts) / len(facts)
+                details["avg_schema_ok"] = sum(schemas) / len(schemas)
+                details["avg_citations_ok"] = sum(citations) / len(citations)
 
         logger.info(
             "📊 Eval gate: %.4f (threshold=%.2f) → %s",
             avg, _EVAL_SCORE_THRESHOLD, "PASS" if passed else "FAIL"
         )
-        return avg, passed
+        return avg, passed, details
 
     except Exception as e:
         logger.warning("📊 Eval gate skipped (error: %s)", e)
-        return 0.0, True  # Don't block on eval harness errors
+        return 0.0, True, {}
 
 
 def load_or_create_state(goal: str) -> SystemState:
@@ -118,6 +148,12 @@ def load_or_create_state(goal: str) -> SystemState:
     state = SystemState(current_goal=goal)
     # Inject persisted heuristics into the working constraints
     state.heuristics = memory.retrieve_skills(top_k=10)
+    # Log episodic memory status
+    ep_count = len(episodic_memory.entries)
+    if ep_count:
+        logger.info("📓 Loaded %d episodic entries from prior runs.", ep_count)
+    else:
+        logger.info("📓 No prior episodic memory — starting fresh.")
     return state
 
 
@@ -151,31 +187,48 @@ def experiment_loop(
             )
             # Record as successful experiment
             from state import ExperimentResult
+            exp_meta = {
+                "executor": "opencode",
+                "agent": _OPENCODE_AGENT or "default",
+                "session_id": result.session_id,
+                "tokens": result.total_tokens,
+                "cost": result.total_cost,
+                "files_changed": result.files_changed,
+                "tools_used": [t["tool"] for t in result.tools_used],
+            }
             state.record_experiment(ExperimentResult(
                 hypothesis=task,
                 outcome="success",
                 output=result.text_output[:2000],
-                metadata={
-                    "executor": "opencode",
-                    "agent": _OPENCODE_AGENT or "default",
-                    "session_id": result.session_id,
-                    "tokens": result.total_tokens,
-                    "cost": result.total_cost,
-                    "files_changed": result.files_changed,
-                    "tools_used": [t["tool"] for t in result.tools_used],
-                },
+                metadata=exp_meta,
             ))
+            # Persist to episodic memory (Layer 3)
+            episodic_memory.record(
+                goal=state.current_goal,
+                hypothesis=task,
+                action=f"opencode:{_OPENCODE_AGENT or 'default'}",
+                outcome="success",
+                metadata=exp_meta,
+            )
             return state, True
         else:
             logger.warning(
                 "❌ OpenCode task failed: %s", result.error or "no DONE signal"
             )
+            fail_meta = {"executor": "opencode", "session_id": result.session_id}
             state.record_experiment(ExperimentResult(
                 hypothesis=task,
                 outcome="failure",
                 output=result.error or result.text_output[:2000],
-                metadata={"executor": "opencode", "session_id": result.session_id},
+                metadata=fail_meta,
             ))
+            episodic_memory.record(
+                goal=state.current_goal,
+                hypothesis=task,
+                action=f"opencode:{_OPENCODE_AGENT or 'default'}",
+                outcome="failure",
+                metadata=fail_meta,
+            )
             return state, False
 
     # ── Built-in worker path ──────────────────────────────────────
@@ -192,6 +245,13 @@ def experiment_loop(
 
         if verdict.passed:
             logger.info("✅ Task passed on attempt %d.", attempt + 1)
+            episodic_memory.record(
+                goal=state.current_goal,
+                hypothesis=task,
+                action=f"worker:attempt-{attempt + 1}",
+                outcome="success",
+                metadata={"score": verdict.score, "attempts": attempt + 1},
+            )
             return state, True
         else:
             logger.info(
@@ -203,6 +263,13 @@ def experiment_loop(
             improvement_hint = verdict.improvement_suggestion
 
     logger.warning("⚠️  Task failed after %d attempts → escalating.", attempt + 1)
+    episodic_memory.record(
+        goal=state.current_goal,
+        hypothesis=task,
+        action=f"worker:exhausted-{Thresholds.ESCALATE_TO_STRATEGIC_AFTER}-attempts",
+        outcome="failure",
+        metadata={"last_score": verdict.score, "issues": verdict.issues},
+    )
     return state, False
 
 
@@ -230,6 +297,16 @@ def project_loop(state: SystemState) -> SystemState:
 
         logger.info("── Project Loop: starting task [%s] %s", task_id, task_def["name"])
 
+        # T-02: Step 4 — Git commit (snapshot before change)
+        score_before, _, _ = run_eval_gate()
+        snapshot = tools.git_commit_snapshot(
+            message=f"auto: snapshot before [{task_id}] {task_def['name']}"
+        )
+        if snapshot["success"]:
+            logger.info("📸 Git snapshot: %s", snapshot["commit_hash"])
+        else:
+            logger.warning("📸 Git snapshot failed: %s", snapshot.get("error", "unknown"))
+
         state, success = experiment_loop(
             state,
             task_description,
@@ -240,16 +317,70 @@ def project_loop(state: SystemState) -> SystemState:
             state.completed_tasks.append(task_id)
             state.task_replan_counts.pop(task_id, None)
 
-            # T-02: Eval gate — check system quality after each task
-            eval_score, eval_passed = run_eval_gate()
-            if not eval_passed:
+            # T-02: Step 6 — Run eval harness, compare before/after
+            score_after, eval_passed, eval_details = run_eval_gate()
+
+            if not eval_passed and score_before > 0 and score_after < score_before:
+                # T-02: Score regressed → git revert
+                logger.warning(
+                    "📊 Eval REGRESSION after task %s (%.4f → %.4f). Reverting.",
+                    task_id, score_before, score_after,
+                )
+                revert_result = tools.git_revert_last()
+                if revert_result["success"]:
+                    logger.info("⏪ Reverted commit %s", revert_result["reverted_hash"])
+                else:
+                    logger.error("⏪ Revert failed: %s", revert_result.get("error"))
+
+                # Record revert in episodic memory
+                episodic_memory.record(
+                    goal=state.current_goal,
+                    hypothesis=task_description,
+                    action=f"git-revert:{revert_result.get('reverted_hash', '?')}",
+                    outcome="failure",
+                    score_before=score_before,
+                    score_after=score_after,
+                    kept=False,
+                    metadata={"task_id": task_id, "revert": revert_result},
+                )
+
+                state.last_error = f"Eval gate regression: {score_after:.4f} < {score_before:.4f}"
+                state = planner.diagnose_failures(state)
+            elif not eval_passed:
+                # Eval failed but no clear regression (e.g., first run)
                 logger.warning(
                     "📊 Eval gate FAILED after task %s (score=%.4f < %.2f). "
                     "Escalating to strategic tier.",
-                    task_id, eval_score, _EVAL_SCORE_THRESHOLD,
+                    task_id, score_after, _EVAL_SCORE_THRESHOLD,
                 )
-                state.last_error = f"Eval gate regression: {eval_score:.4f} < {_EVAL_SCORE_THRESHOLD}"
+                episodic_memory.record(
+                    goal=state.current_goal,
+                    hypothesis=task_description,
+                    action=f"git-keep:{snapshot.get('commit_hash', '?')}",
+                    outcome="partial",
+                    score_before=score_before,
+                    score_after=score_after,
+                    kept=True,
+                    metadata={"task_id": task_id, "reason": "below threshold but no regression"},
+                )
+                state.last_error = f"Eval gate regression: {score_after:.4f} < {_EVAL_SCORE_THRESHOLD}"
                 state = planner.diagnose_failures(state)
+            else:
+                # T-02: Score held or improved → keep change
+                logger.info(
+                    "✅ Eval gate PASSED after task %s (%.4f → %.4f). Keeping change.",
+                    task_id, score_before, score_after,
+                )
+                episodic_memory.record(
+                    goal=state.current_goal,
+                    hypothesis=task_description,
+                    action=f"git-keep:{snapshot.get('commit_hash', '?')}",
+                    outcome="success",
+                    score_before=score_before,
+                    score_after=score_after,
+                    kept=True,
+                    metadata={"task_id": task_id},
+                )
 
             # Unlock dependent tasks
             for t in state.project_graph:
@@ -321,10 +452,176 @@ def strategic_loop(goal: str) -> SystemState:
     return state
 
 
+# ════════════════════════════════════════════════════════════════
+#  Autonomous Self-Improvement Loop (T-05)
+#
+#  The Oracle's loop: analyze → hypothesis → plan → git commit →
+#  execute → eval → keep/revert → episodic → heuristic → repeat
+# ════════════════════════════════════════════════════════════════
+
+_MAX_IMPROVEMENT_CYCLES = int(__import__("os").environ.get("MAX_IMPROVEMENT_CYCLES", "5"))
+
+
+def autonomous_improvement_loop(max_cycles: int | None = None) -> dict:
+    """
+    Run the autonomous self-improvement loop.
+
+    Each cycle:
+      1. Run eval harness → get per-metric scores
+      2. Select improvement template (weakest metric)
+      3. Git snapshot (before change)
+      4. Execute improvement via OpenCode or built-in worker
+      5. Run eval harness again (compare before/after)
+      6. Keep or revert based on score delta
+      7. Record in episodic memory (kept=True/False)
+      8. Save heuristic on successful improvement
+
+    Returns summary dict with cycle results.
+    """
+    cycles = max_cycles or _MAX_IMPROVEMENT_CYCLES
+    results = []
+
+    logger.info("═══ Autonomous Improvement Loop: %d cycles ═══", cycles)
+
+    for cycle in range(1, cycles + 1):
+        logger.info("── Cycle %d/%d ──", cycle, cycles)
+
+        # Step 1: Analyze eval results
+        score_before, _, eval_details = run_eval_gate()
+        if score_before == 0.0 and not eval_details:
+            logger.warning("📊 No eval harness available. Stopping.")
+            break
+
+        logger.info("📊 Current score: %.4f | Metrics: %s",
+                     score_before,
+                     {k: f"{v:.3f}" for k, v in eval_details.items() if k != "avg_case_score"})
+
+        # Step 2: Select improvement template, or LLM fallback (T-06)
+        template = planner.select_improvement(eval_details)
+        if template is None:
+            logger.info("📋 No template matches. Trying LLM fallback (T-06)...")
+            template = planner.generate_novel_improvement(
+                eval_details,
+                episodic_summary=episodic_memory.summary(),
+                heuristics=memory.retrieve_heuristics(top_k=5),
+            )
+        if template is None:
+            logger.info("✅ No improvements found (templates or LLM). Stopping.")
+            results.append({"cycle": cycle, "action": "none", "reason": "no improvement available"})
+            break
+
+        task_description = planner.format_improvement_task(template)
+        logger.info("📋 Template %s: %s", template["id"], template["condition"])
+
+        # Step 3: Git snapshot
+        snapshot = tools.git_commit_snapshot(
+            message=f"auto: snapshot before improvement cycle {cycle} [{template['id']}]"
+        )
+        if snapshot["success"]:
+            logger.info("📸 Snapshot: %s", snapshot["commit_hash"])
+
+        # Step 4: Execute improvement
+        state = load_or_create_state(f"autonomous-improvement-cycle-{cycle}")
+        state.active_hypothesis = template["hypothesis"]
+
+        state, success = experiment_loop(state, task_description)
+
+        if not success:
+            logger.warning("❌ Cycle %d: experiment failed. Skipping eval.", cycle)
+            episodic_memory.record(
+                goal="autonomous-improvement",
+                hypothesis=template["hypothesis"],
+                action=f"cycle-{cycle}:experiment-failed",
+                outcome="failure",
+                score_before=score_before,
+                metadata={"template_id": template["id"], "cycle": cycle},
+            )
+            results.append({"cycle": cycle, "action": "failed", "template": template["id"]})
+            continue
+
+        # Step 5: Run eval again
+        score_after, _, details_after = run_eval_gate()
+        delta = round(score_after - score_before, 6)
+        logger.info("📊 Score: %.4f → %.4f (Δ%+.4f)", score_before, score_after, delta)
+
+        # Step 6: Keep or revert
+        if delta >= 0:
+            # Keep
+            logger.info("✅ Cycle %d: KEEP (Δ%+.4f)", cycle, delta)
+            episodic_memory.record(
+                goal="autonomous-improvement",
+                hypothesis=template["hypothesis"],
+                action=f"cycle-{cycle}:keep:{snapshot.get('commit_hash', '?')}",
+                outcome="success",
+                score_before=score_before,
+                score_after=score_after,
+                kept=True,
+                metadata={"template_id": template["id"], "cycle": cycle},
+            )
+            # Step 7: Save heuristic
+            memory.save_heuristic(
+                metric=template["metric"],
+                action=template["action"],
+                score_before=score_before,
+                score_after=score_after,
+                template_id=template["id"],
+            )
+            results.append({"cycle": cycle, "action": "keep", "delta": delta, "template": template["id"]})
+        else:
+            # Revert
+            logger.warning("⏪ Cycle %d: REVERT (Δ%+.4f)", cycle, delta)
+            revert = tools.git_revert_last()
+            episodic_memory.record(
+                goal="autonomous-improvement",
+                hypothesis=template["hypothesis"],
+                action=f"cycle-{cycle}:revert:{revert.get('reverted_hash', '?')}",
+                outcome="failure",
+                score_before=score_before,
+                score_after=score_after,
+                kept=False,
+                metadata={"template_id": template["id"], "cycle": cycle},
+            )
+            results.append({"cycle": cycle, "action": "revert", "delta": delta, "template": template["id"]})
+
+    # Summary
+    keeps = sum(1 for r in results if r.get("action") == "keep")
+    reverts = sum(1 for r in results if r.get("action") == "revert")
+    total_delta = sum(r.get("delta", 0) for r in results if r.get("action") == "keep")
+
+    logger.info(
+        "═══ Autonomous Loop Complete: %d cycles, %d kept, %d reverted, net Δ%+.4f ═══",
+        len(results), keeps, reverts, total_delta,
+    )
+
+    return {
+        "cycles": results,
+        "keeps": keeps,
+        "reverts": reverts,
+        "net_delta": total_delta,
+        "episodic_entries": len(episodic_memory.entries),
+        "heuristics_saved": len(memory.load_heuristics()),
+    }
+
+
 if __name__ == "__main__":
-    goal = " ".join(sys.argv[1:]) if len(sys.argv) > 1 else "Research task"
-    final_state = strategic_loop(goal)
-    print("\n── COMPLETED TASKS ──")
-    for t in final_state.completed_tasks:
-        print(f"  ✅ {t}")
-    print(f"\nArtifacts saved to: {Paths.ARTIFACTS}")
+    import os
+
+    if os.environ.get("AUTONOMOUS_LOOP") == "1":
+        # Run the autonomous self-improvement loop
+        max_cycles = int(os.environ.get("MAX_IMPROVEMENT_CYCLES", "5"))
+        summary = autonomous_improvement_loop(max_cycles)
+        print("\n── AUTONOMOUS LOOP RESULTS ──")
+        for r in summary["cycles"]:
+            action = r["action"].upper()
+            delta = f" Δ{r.get('delta', 0):+.4f}" if "delta" in r else ""
+            tpl = f" [{r.get('template', '')}]" if "template" in r else ""
+            print(f"  Cycle {r['cycle']}: {action}{delta}{tpl}")
+        print(f"\n  Kept: {summary['keeps']} | Reverted: {summary['reverts']} | Net: Δ{summary['net_delta']:+.4f}")
+        print(f"  Episodic entries: {summary['episodic_entries']} | Heuristics: {summary['heuristics_saved']}")
+    else:
+        goal = " ".join(sys.argv[1:]) if len(sys.argv) > 1 else "Research task"
+        final_state = strategic_loop(goal)
+        print("\n── COMPLETED TASKS ──")
+        for t in final_state.completed_tasks:
+            print(f"  ✅ {t}")
+        print(f"\nArtifacts saved to: {Paths.ARTIFACTS}")

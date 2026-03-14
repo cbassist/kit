@@ -86,6 +86,84 @@ def _ensure_embeddings(skills: list[dict[str, Any]]) -> dict[str, list[float]]:
 
 
 # ════════════════════════════════════════════════════════════════
+#  Episodic Memory (Layer 3 — persistent across runs)
+# ════════════════════════════════════════════════════════════════
+
+import uuid
+from dataclasses import asdict
+from state import EpisodicEntry
+
+
+class EpisodicMemory:
+    """
+    Persistent episodic memory — survives across runs via episodic.json.
+
+    Each entry records what was tried, what happened, and whether
+    the change was kept or reverted. This is Layer 3 of the 5-layer
+    memory hierarchy (Oracle design).
+    """
+
+    def __init__(self, path: Path | None = None) -> None:
+        self.path = path or Paths.EPISODIC_DB
+        self.entries: list[EpisodicEntry] = []
+        self._load()
+
+    def _load(self) -> None:
+        if self.path.exists():
+            text = self.path.read_text().strip()
+            if text:
+                raw = json.loads(text)
+                self.entries = [EpisodicEntry(**e) for e in raw]
+
+    def save(self) -> None:
+        self.path.write_text(
+            json.dumps([asdict(e) for e in self.entries], indent=2, default=str)
+        )
+
+    def record(
+        self,
+        goal: str,
+        hypothesis: str,
+        action: str,
+        outcome: str,
+        score_before: float | None = None,
+        score_after: float | None = None,
+        kept: bool | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> EpisodicEntry:
+        delta = None
+        if score_before is not None and score_after is not None:
+            delta = round(score_after - score_before, 6)
+
+        entry = EpisodicEntry(
+            cycle_id=uuid.uuid4().hex[:12],
+            goal=goal,
+            hypothesis=hypothesis,
+            action=action,
+            outcome=outcome,
+            score_before=score_before,
+            score_after=score_after,
+            score_delta=delta,
+            kept=kept,
+            metadata=metadata or {},
+        )
+        self.entries.append(entry)
+        self.save()
+        return entry
+
+    def recent(self, n: int = 10) -> list[EpisodicEntry]:
+        return self.entries[-n:]
+
+    def summary(self, n: int = 5) -> str:
+        lines = ["EPISODIC MEMORY (last %d episodes):" % min(n, len(self.entries))]
+        for ep in self.recent(n):
+            delta_str = f" Δ{ep.score_delta:+.4f}" if ep.score_delta is not None else ""
+            kept_str = " KEPT" if ep.kept else (" REVERTED" if ep.kept is False else "")
+            lines.append(f"  [{ep.outcome.upper()}]{delta_str}{kept_str} {ep.hypothesis[:80]}")
+        return "\n".join(lines)
+
+
+# ════════════════════════════════════════════════════════════════
 #  Skills DB (Semantic Memory)
 # ════════════════════════════════════════════════════════════════
 
@@ -223,6 +301,68 @@ def search(query: str, top_k: int = 8) -> list[dict[str, Any]]:
 
     scored.sort(reverse=True, key=lambda x: x[0])
     return [item for _, item in scored[:top_k]]
+
+
+# ════════════════════════════════════════════════════════════════
+#  Heuristic Storage (T-04 — Layer 4 auto-captured patterns)
+# ════════════════════════════════════════════════════════════════
+
+
+def load_heuristics() -> list[dict[str, Any]]:
+    """Load all auto-captured improvement heuristics."""
+    if not Paths.HEURISTICS_DB.exists():
+        return []
+    text = Paths.HEURISTICS_DB.read_text().strip()
+    if not text:
+        return []
+    return json.loads(text)
+
+
+def save_heuristic(
+    metric: str,
+    action: str,
+    score_before: float,
+    score_after: float,
+    template_id: str | None = None,
+    files_changed: list[str] | None = None,
+) -> None:
+    """
+    Auto-capture a successful improvement pattern into heuristics.json.
+
+    Called when a cycle improves the eval score. Records what metric was
+    targeted, what action was taken, and what delta was achieved — so
+    future runs can prioritize proven strategies.
+    """
+    heuristics = load_heuristics()
+    delta = round(score_after - score_before, 6)
+    heuristics.append({
+        "metric": metric,
+        "action": action,
+        "score_before": score_before,
+        "score_after": score_after,
+        "score_delta": delta,
+        "template_id": template_id,
+        "files_changed": files_changed or [],
+        "timestamp": __import__("time").time(),
+    })
+    Paths.HEURISTICS_DB.write_text(json.dumps(heuristics, indent=2))
+    logger.info(
+        "[MEMORY] Heuristic saved: %s → Δ%+.4f (%s)",
+        metric, delta, action[:60],
+    )
+
+
+def retrieve_heuristics(metric: str | None = None, top_k: int = 5) -> list[dict[str, Any]]:
+    """
+    Retrieve heuristics, optionally filtered by metric.
+    Returns most recent first.
+    """
+    heuristics = load_heuristics()
+    if metric:
+        heuristics = [h for h in heuristics if h.get("metric") == metric]
+    # Sort by score_delta descending (best improvements first)
+    heuristics.sort(key=lambda h: h.get("score_delta", 0), reverse=True)
+    return heuristics[:top_k]
 
 
 # ════════════════════════════════════════════════════════════════

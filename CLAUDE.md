@@ -32,10 +32,10 @@ OPENCODE_EXECUTOR=1 OPENCODE_AGENT=sisyphus uv run main.py "Your goal here"
 | `ai-lab/llm.py` | Unified LLM client (handles O1 API quirks) | ✅ |
 | `ai-lab/critic.py` | Worker output evaluation + scoring | ✅ |
 | `ai-lab/worker.py` | Stateless task execution (fast tier) | ✅ |
-| `ai-lab/state.py` | 5-layer memory hierarchy, JSON checkpoint/resume | ⚠️ Episodic resets per-run |
-| `ai-lab/memory.py` | Skill heuristics DB + vector search (Ollama embeddings) | ⚠️ Never auto-called |
+| `ai-lab/state.py` | 5-layer memory hierarchy, JSON checkpoint/resume + episodic persistence | ✅ |
+| `ai-lab/memory.py` | Skill heuristics DB + vector search + episodic memory (Layer 3) | ✅ |
 | `ai-lab/config.py` | Model routing, thresholds, env config | ✅ |
-| `ai-lab/tools.py` | Deterministic tools: Python exec, shell, file I/O | ✅ |
+| `ai-lab/tools.py` | Deterministic tools: Python exec, shell, file I/O, git snapshot/revert | ✅ |
 | `ai-lab/evals/knowledge_plane/` | Eval harness (10 cases, 4 metrics, score: 0.778) | ✅ |
 
 ## Key Documents
@@ -53,16 +53,36 @@ OPENCODE_EXECUTOR=1 OPENCODE_AGENT=sisyphus uv run main.py "Your goal here"
 ## Autonomous Loop Roadmap (Oracle-Ordered)
 
 ```
-T-01: Persist Episodic Memory     🔴  ← START HERE
-  T-02: Git Keep/Revert           🔴
-    T-03: Template Improvements    🔴
-      T-04: Heuristic Storage      🔴
-        T-05: Wire Into Loop       🔴
-          T-06: LLM Fallback       ⚪  (optional)
+T-01: Persist Episodic Memory     🟢  ✅ DONE
+  T-02: Git Keep/Revert           🟢  ✅ DONE
+    T-03: Template Improvements    🟢  ✅ DONE
+      T-04: Heuristic Storage      🟢  ✅ DONE
+        T-05: Wire Into Loop       🟢  ✅ DONE
+          T-06: LLM Fallback       🟢  ✅ DONE
           T-07: 5-Cycle Test       🔴  ← VALIDATION
 ```
 
 Full details, Mermaid diagrams, and design decisions in `docs/lab/OpenCode/autonomous-loop-roadmap.md`.
+
+## Task Management (Archon MCP)
+
+**All task tracking uses the Archon MCP server.** Do not use TodoWrite or local markdown for task management.
+
+**Active Project:** `03e6e8df-a228-4a2c-abf7-5ec49755ca67` — Autonomous Self-Improvement Loop
+
+**Task-Driven Development Cycle:**
+1. **Get task** → `find_tasks(filter_by="status", filter_value="todo")` or `find_tasks(task_id="...")`
+2. **Start work** → `manage_task("update", task_id="...", status="doing")`
+3. **Implement** → Write code
+4. **Review** → `manage_task("update", task_id="...", status="review")`
+5. **Complete** → `manage_task("update", task_id="...", status="done")`
+6. **Next** → `find_tasks(filter_by="status", filter_value="todo")`
+
+**Rules:**
+- Status flow: `todo` → `doing` → `review` → `done`
+- Only ONE task in `doing` at a time
+- Higher `task_order` = higher priority
+- Never code without checking current tasks first
 
 ## Key Rules
 

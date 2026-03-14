@@ -448,6 +448,207 @@ Also run a pre-mortem: assume the chosen recovery strategy also fails after 3 mo
 
 
 # ════════════════════════════════════════════════════════════════
+#  Improvement Templates (T-03 — Template-Based Hypothesis Generation)
+# ════════════════════════════════════════════════════════════════
+
+# Each template: metric → threshold → proven fix from real cycles.
+# Seeded from the 4 successful improvement cycles (0.547 → 0.778).
+IMPROVEMENT_TEMPLATES: list[dict[str, Any]] = [
+    {
+        "id": "TPL-01",
+        "metric": "citations_ok",
+        "threshold": 1.0,
+        "condition": "citations_ok rate < 100%",
+        "hypothesis": "Model outputs bare numeric indices instead of doc_id names in key_evidence_ids",
+        "action": "Add explicit instruction in strategic_prompt() to use doc_id values (e.g. CANON.md) in key_evidence_ids, not bracket index numbers",
+        "files": ["evals/knowledge_plane/runner.py"],
+        "expected_delta": "+0.134",
+        "source_cycle": "Cycle 2 — score 0.562 → 0.696",
+    },
+    {
+        "id": "TPL-02",
+        "metric": "gold_fact_coverage",
+        "threshold": 0.25,
+        "condition": "gold_fact_coverage < 25%",
+        "hypothesis": "Model paraphrases instead of quoting key phrases from evidence",
+        "action": "Instruct model to quote key phrases exactly as they appear in evidence instead of paraphrasing",
+        "files": ["evals/knowledge_plane/runner.py"],
+        "expected_delta": "+0.052",
+        "source_cycle": "Cycle 3 — score 0.696 → 0.748",
+    },
+    {
+        "id": "TPL-03",
+        "metric": "support_recall",
+        "threshold": 0.90,
+        "condition": "support_recall < 90%",
+        "hypothesis": "One document dominates all top-k retrieval slots, crowding out other relevant docs",
+        "action": "Deduplicate search results by doc_id, keeping highest-scoring chunk per document",
+        "files": ["memory.py"],
+        "expected_delta": "+0.030",
+        "source_cycle": "Cycle 4 — score 0.748 → 0.778",
+    },
+    {
+        "id": "TPL-04",
+        "metric": "schema_ok",
+        "threshold": 1.0,
+        "condition": "schema_ok rate < 100%",
+        "hypothesis": "Model response missing required JSON fields",
+        "action": "Add explicit field list to prompt and validate output schema before grading",
+        "files": ["evals/knowledge_plane/runner.py"],
+        "expected_delta": "+0.020",
+        "source_cycle": "Cycle 1 — grading fix",
+    },
+]
+
+
+def select_improvement(eval_results: dict[str, Any]) -> dict[str, Any] | None:
+    """
+    Analyze eval results and return the best matching improvement template.
+
+    Args:
+        eval_results: Dict with per-metric averages. Expected keys:
+            avg_support_recall, avg_gold_fact_coverage, avg_schema_ok, avg_citations_ok,
+            avg_case_score
+
+    Returns:
+        Matching template dict with hypothesis/action, or None if no template matches.
+    """
+    # Build metric → value mapping
+    metrics = {
+        "support_recall": eval_results.get("avg_support_recall", 1.0),
+        "gold_fact_coverage": eval_results.get("avg_gold_fact_coverage", 1.0),
+        "schema_ok": eval_results.get("avg_schema_ok", 1.0),
+        "citations_ok": eval_results.get("avg_citations_ok", 1.0),
+    }
+
+    # Find templates where the metric is below threshold, sorted by biggest gap
+    candidates = []
+    for tpl in IMPROVEMENT_TEMPLATES:
+        metric_val = metrics.get(tpl["metric"], 1.0)
+        if metric_val < tpl["threshold"]:
+            gap = tpl["threshold"] - metric_val
+            candidates.append((gap, tpl))
+
+    if not candidates:
+        logger.info("[TEMPLATES] No template matches — all metrics above thresholds.")
+        return None
+
+    # Pick the template with the biggest gap (weakest metric)
+    candidates.sort(reverse=True, key=lambda x: x[0])
+    gap, best = candidates[0]
+    logger.info(
+        "[TEMPLATES] Selected %s: %s (metric=%s, value=%.3f, threshold=%.3f, gap=%.3f)",
+        best["id"], best["condition"], best["metric"],
+        metrics[best["metric"]], best["threshold"], gap,
+    )
+    return best
+
+
+def format_improvement_task(template: dict[str, Any]) -> str:
+    """Convert an improvement template into a task description for the experiment loop."""
+    return (
+        f"IMPROVEMENT HYPOTHESIS: {template['hypothesis']}\n\n"
+        f"ACTION: {template['action']}\n\n"
+        f"FILES TO MODIFY: {', '.join(template['files'])}\n\n"
+        f"EXPECTED IMPACT: {template['expected_delta']} (based on {template['source_cycle']})\n\n"
+        f"CONSTRAINT: Only modify the specified files. Make the minimal change needed."
+    )
+
+
+def generate_novel_improvement(
+    eval_details: dict[str, Any],
+    episodic_summary: str = "",
+    heuristics: list[dict[str, Any]] | None = None,
+) -> dict[str, Any] | None:
+    """
+    T-06: LLM fallback — generate a novel improvement hypothesis when
+    no template matches. Uses PROJECT tier (gpt-4o) to keep costs low.
+
+    Only called when select_improvement() returns None.
+
+    Returns a dict matching the template schema:
+        {metric, hypothesis, action, files, expected_delta}
+    Or None if the LLM can't suggest an improvement.
+    """
+    # Build context for the LLM
+    metrics_str = "\n".join(
+        f"  {k}: {v:.4f}" for k, v in eval_details.items()
+    )
+    heuristics_str = ""
+    if heuristics:
+        heuristics_str = "\nPreviously successful improvements (do NOT repeat these):\n"
+        for h in heuristics:
+            heuristics_str += f"  - {h['metric']}: {h['action']} (Δ{h.get('score_delta', 0):+.4f})\n"
+
+    prompt = f"""You are analyzing an eval harness for a knowledge-retrieval system.
+
+Current per-metric averages:
+{metrics_str}
+
+Scoring weights: support_recall=0.35, gold_fact_coverage=0.25, schema_ok=0.20, citations_ok=0.20
+
+{episodic_summary}
+{heuristics_str}
+All known template improvements have been applied or don't match.
+Suggest ONE novel improvement that could raise the aggregate score.
+
+Respond in JSON only (no markdown fences):
+{{
+  "metric": "the metric to target (support_recall|gold_fact_coverage|schema_ok|citations_ok)",
+  "hypothesis": "what you believe is wrong",
+  "action": "specific code change to make",
+  "files": ["file/paths/to/modify.py"],
+  "expected_delta": "+0.0XX",
+  "rationale": "why this should work"
+}}
+
+Rules:
+- Target the metric with the most room for weighted improvement
+- Be specific about the code change (function name, file, what to modify)
+- Keep the change minimal — one focused modification
+- If you cannot suggest an improvement, respond with {{"no_improvement": true}}"""
+
+    try:
+        raw = llm.call(
+            [{"role": "user", "content": prompt}],
+            model=Models.PROJECT,
+            system_prompt="You are a precision eval-improvement advisor. Respond in JSON only.",
+        )
+
+        payload = json.loads(_strip_markdown_fences(raw))
+
+        if payload.get("no_improvement"):
+            logger.info("[LLM-FALLBACK] LLM found no novel improvement to suggest.")
+            return None
+
+        # Validate required fields
+        required = {"metric", "hypothesis", "action", "files"}
+        if not required.issubset(payload.keys()):
+            logger.warning("[LLM-FALLBACK] Missing fields: %s", required - set(payload.keys()))
+            return None
+
+        logger.info(
+            "[LLM-FALLBACK] Novel improvement: %s → %s",
+            payload["metric"], payload["action"][:80],
+        )
+        return {
+            "id": "LLM-NOVEL",
+            "metric": payload["metric"],
+            "threshold": None,
+            "condition": f"LLM-generated: {payload.get('rationale', 'novel improvement')[:80]}",
+            "hypothesis": payload["hypothesis"],
+            "action": payload["action"],
+            "files": payload["files"],
+            "expected_delta": payload.get("expected_delta", "unknown"),
+            "source_cycle": "LLM fallback (gpt-4o)",
+        }
+
+    except Exception as e:
+        logger.warning("[LLM-FALLBACK] Failed: %s", e)
+        return None
+
+
+# ════════════════════════════════════════════════════════════════
 #  .sisyphus/plans/ Emitter (OMO Integration — Option B)
 # ════════════════════════════════════════════════════════════════
 
