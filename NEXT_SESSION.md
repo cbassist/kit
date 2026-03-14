@@ -1,57 +1,45 @@
-# Next Session — Goal 001 Smoke Test
+# Next Session — Speculative Decoding + Heuristic Extraction
 
-## Pre-flight (after reboot)
+## Where We Left Off
 
-1. **Open Terminal only** — no Cursor, no Claude desktop, no Docker
-2. Verify Ollama is running:
-   ```bash
-   ollama list
-   ```
-3. Check memory headroom:
-   ```bash
-   memory_pressure | head -5
-   ```
-   Want to see ~14GB+ free (should be easy with just Terminal + Ollama)
+Goal 001 is **COMPLETE**. The lab architecture is validated:
+- 14B coder scored 24/25 (winner), matching draftbench predictions
+- Full report: `ai-lab/goal_001_results/GOAL_001_REPORT.md`
+- V-Model is at "Extract learnings, update heuristics"
 
-## Run the smoke test
+## Next: Two Parallel Tracks
 
-```bash
-cd /Users/mike/projects/01/ai-lab
-uv run run_goal_001.py
-```
+### Track A: MLX Speculative Decoding Test
 
-This tests the two already-installed models:
-- `qwen2.5-coder:14b-instruct-q6_K` (~12GB) — should score well
-- `llama3.2:1b` (~1.3GB) — baseline, should score low
-
-**What to look for:**
-- 14B should clearly outscore 1B (validates the benchmark differentiates quality)
-- No crashes, no OOM
-- Results saved to `ai-lab/goal_001_results/`
-- Winner recorded in `ai-lab/skills.json`
-
-## If smoke test passes → full sweep
+The draftbench data predicts **50-80% speedup** with 14B + 1.5B draft on Apple Silicon.
+Ollama doesn't support speculative decoding natively — need to use MLX or llama.cpp.
 
 ```bash
-# Pull additional models
-ollama pull qwen2.5:1.5b
-ollama pull qwen2.5:7b
+# Install mlx-lm if not present
+pip install mlx-lm
 
-# Run full sweep
-uv run run_goal_001.py --full
+# Test 14B + 1.5B draft pairing
+# (specific commands depend on MLX model format — research needed)
 ```
 
-## If something breaks
+**What to validate:**
+- Does the speedup match draftbench predictions (~50-80%)?
+- Does quality remain comparable to standalone 14B?
+- Is the memory footprint ~13GB (14B + 1.5B), leaving headroom for critic?
 
-- **OOM on 14B**: Model needs ~12GB, may not fit if system is using too much. Try `--model llama3.2:1b` first to validate the harness, then close apps.
-- **API errors**: Check that `OPENAI_API_KEY` is set in environment (the critic uses gpt-4o via API)
-- **Ollama not responding**: `ollama serve` in a separate terminal tab
+### Track B: Extract Heuristics → V-Model Ascent
 
-## What this validates
+The V-Model needs to climb back up:
+1. **Extract learnings** into skills DB (not just "14B wins" but the principles)
+2. **Confirm architecture** — write the closing V-Model assessment
 
-If the 14B model scores significantly higher than 1B, and the harness runs clean:
-- Benchmark suite produces differentiated, meaningful scores ✓
-- Critic tier (gpt-4o) reliably scores model output ✓
-- Results persist correctly ✓
-- Skills DB records the winner ✓
-- We're ready for the convergence test with draft model pairings
+Learnings to codify:
+- Model family > parameter count for targeted tasks
+- Critic JSON parsing must handle markdown fences
+- Benchmark suite (5 tasks, 5 criteria, critic-scored) is effective
+- gpt-4o as critic is reliable but needs robust response parsing
+
+### On Deck (not blocking these)
+- Extract GPT-5.4's eval harness into `ai-lab/evals/knowledge_plane/`
+- Build the A/B retrieval comparison (local vs hosted)
+- Add vector search to skills DB
