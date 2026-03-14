@@ -127,11 +127,11 @@ flowchart TB
 - [x] Goal 001 defined
 
 ### What's Next
-- [ ] Wire draftbench `sweep.py` as a tool in `tools.py`
-- [ ] Pull missing Ollama models (qwen2.5:1.5b, qwen2.5:32b)
-- [ ] Build the 5-task benchmark suite for quality scoring
-- [ ] Run Goal 001 end-to-end
-- [ ] Validate convergence against draftbench predictions
+- [x] Build the 5-task benchmark suite for quality scoring → `benchmark.py`
+- [x] Build Goal 001 runner → `run_goal_001.py`
+- [ ] Reboot, launch Terminal-only, run smoke test
+- [ ] Pull missing Ollama models (qwen2.5:1.5b, qwen2.5:7b)
+- [ ] Run full sweep and validate convergence against draftbench predictions
 
 ### On Deck (not blocking)
 - [ ] Extract GPT-5.4's eval harness into `ai-lab/evals/knowledge_plane/`
