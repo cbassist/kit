@@ -82,12 +82,29 @@ def call(
     if system_prompt:
         messages = [{"role": "system", "content": system_prompt}] + messages
 
-    if _is_o1(model):
-        return _call_o1(messages, model, max_tokens)
-    elif _is_ollama(model):
+    if _is_ollama(model):
         return _call_ollama(messages, model, max_tokens, **kwargs)
-    else:
-        return _call_standard(messages, model, max_tokens, **kwargs)
+
+    # API calls with Ollama auto-fallback
+    try:
+        if _is_o1(model):
+            return _call_o1(messages, model, max_tokens)
+        else:
+            return _call_standard(messages, model, max_tokens, **kwargs)
+    except Exception as e:
+        # Fallback to Ollama if API fails and Ollama is available
+        if _get_ollama_client() is not None:
+            logger.warning(
+                "⚠️ API call failed (%s: %s). Falling back to Ollama %s.",
+                type(e).__name__, str(e)[:100], Models.LOCAL_WORKER,
+            )
+            try:
+                return _call_ollama(messages, Models.LOCAL_WORKER, max_tokens)
+            except Exception as fallback_err:
+                logger.error("❌ Ollama fallback also failed: %s", fallback_err)
+                raise e  # Re-raise original error
+        else:
+            raise  # No Ollama configured, surface the original error
 
 
 def _call_o1(

@@ -22,9 +22,10 @@ OPENAI_API_KEY: str = os.environ.get("OPENAI_API_KEY", "")
 ANTHROPIC_API_KEY: str = os.environ.get("ANTHROPIC_API_KEY", "")
 
 if not OPENAI_API_KEY:
-    raise EnvironmentError(
-        "OPENAI_API_KEY is not set. "
-        "Copy .env.example → .env and add your key."
+    import logging as _logging
+    _logging.warning(
+        "OPENAI_API_KEY is not set. API models unavailable — Ollama only. "
+        "Set it in .env to enable cloud models."
     )
 
 
