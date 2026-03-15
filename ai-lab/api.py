@@ -29,6 +29,8 @@ import httpx
 
 import db
 import llm
+from memory import EpisodicMemory
+from config import Paths
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +114,116 @@ async def get_status():
         "cost": cost,
         "running_goals": [{"id": g.id, "goal": g.goal[:80]} for g in running],
     }
+
+
+# ════════════════════════════════════════════════════════════════
+#  Status Feed + Session History
+# ════════════════════════════════════════════════════════════════
+
+@app.get("/episodes")
+async def get_episodes(n: int = 20):
+    """Recent episodic memory entries."""
+    ep = EpisodicMemory()
+    entries = ep.recent(n)
+    return {
+        "total": len(ep.entries),
+        "episodes": [
+            {
+                "cycle_id": e.cycle_id,
+                "goal": e.goal,
+                "hypothesis": e.hypothesis[:100],
+                "outcome": e.outcome,
+                "score_before": e.score_before,
+                "score_after": e.score_after,
+                "score_delta": e.score_delta,
+                "kept": e.kept,
+                "timestamp": e.timestamp,
+            }
+            for e in entries
+        ],
+    }
+
+
+@app.get("/heuristics")
+async def get_heuristics():
+    """Learned heuristics from successful improvements."""
+    import memory
+    heuristics = memory.retrieve_heuristics(top_k=20)
+    return {"count": len(heuristics), "heuristics": heuristics}
+
+
+@app.get("/sessions")
+async def get_sessions():
+    """Group episodic entries by goal to show session history."""
+    ep = EpisodicMemory()
+    sessions: dict[str, list] = {}
+    for e in ep.entries:
+        key = e.goal
+        if key not in sessions:
+            sessions[key] = []
+        sessions[key].append({
+            "cycle_id": e.cycle_id,
+            "outcome": e.outcome,
+            "score_delta": e.score_delta,
+            "kept": e.kept,
+            "timestamp": e.timestamp,
+        })
+    return {
+        "session_count": len(sessions),
+        "sessions": [
+            {
+                "goal": goal,
+                "episodes": entries,
+                "total_delta": sum(e.get("score_delta", 0) or 0 for e in entries),
+                "keeps": sum(1 for e in entries if e.get("kept") is True),
+                "reverts": sum(1 for e in entries if e.get("kept") is False),
+            }
+            for goal, entries in sessions.items()
+        ],
+    }
+
+
+from fastapi.responses import StreamingResponse
+
+
+@app.get("/stream")
+async def status_stream():
+    """Server-Sent Events stream of system status. Connect and watch in real-time."""
+    async def event_generator():
+        last_ep_count = 0
+        while True:
+            ep = EpisodicMemory()
+            cost = llm.get_cost_summary()
+            queued = db.list_goals(status="queued")
+            running = db.list_goals(status="running")
+
+            data = json.dumps({
+                "queued": len(queued),
+                "running": len(running),
+                "running_goals": [{"id": g.id, "goal": g.goal[:60]} for g in running],
+                "episodes": len(ep.entries),
+                "cost": cost,
+            })
+
+            yield f"data: {data}\n\n"
+
+            # Push new episodes as they happen
+            if len(ep.entries) > last_ep_count:
+                for e in ep.entries[last_ep_count:]:
+                    ep_data = json.dumps({
+                        "type": "episode",
+                        "cycle_id": e.cycle_id,
+                        "outcome": e.outcome,
+                        "score_delta": e.score_delta,
+                        "kept": e.kept,
+                        "hypothesis": e.hypothesis[:80],
+                    })
+                    yield f"data: {ep_data}\n\n"
+                last_ep_count = len(ep.entries)
+
+            await asyncio.sleep(5)
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 # ════════════════════════════════════════════════════════════════
