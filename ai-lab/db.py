@@ -50,6 +50,7 @@ class Goal:
     status: str = "queued"  # queued | running | done | failed
     priority: int = 50
     source: str = "cli"     # cli | telegram | slack | web | cron
+    reply_to: str = ""      # chat_id or channel for pushing results back
     result: dict | None = None
     created_at: float = field(default_factory=time.time)
     started_at: float | None = None
@@ -71,9 +72,9 @@ def _save_goals(goals: list[dict]) -> None:
     _GOALS_FILE.write_text(json.dumps(goals, indent=2, default=str))
 
 
-def submit_goal(goal_text: str, priority: int = 50, source: str = "cli") -> Goal:
+def submit_goal(goal_text: str, priority: int = 50, source: str = "cli", reply_to: str = "") -> Goal:
     """Add a new goal to the queue."""
-    goal = Goal(goal=goal_text, priority=priority, source=source)
+    goal = Goal(goal=goal_text, priority=priority, source=source, reply_to=reply_to)
 
     if _USE_POSTGRES:
         conn = _get_pg()
