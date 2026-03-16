@@ -15,6 +15,10 @@ ai-lab/artifacts/
 ai-lab/state.db
 ai-lab/state.db.json
 ai-lab/skills.json
+ai-lab/episodic.json
+ai-lab/heuristics.json
+ai-lab/goals.json
+ai-lab/logs/
 ai-lab/*.log
 
 # macOS
